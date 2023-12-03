@@ -9,20 +9,24 @@ local LOAD_ROADS			= false
 local LOAD_POINTS		= false
 local LOAD_OSM			= true
 local COEFF				= 4  -- 4 units in 1 meter
-local SHOW_PLAYER_INFO	= false
+local SHOW_PLAYER_INFO	= true
+local TERRAIN_HIGHT		= 50
+local FLOOR_WIDTH		= 2.8 -- meters
 
 --local l, b, r, t = 8.38498, 49.01212, 8.40052	, 49.01898;
 --local l, b, r, t = 8.39150, 49.02000, 8.40000, 49.02030; --klein
 --local l, b, r, t = 7.9460, 46.3040, 7.9824, 46.3184; -- Mountains
 
+local l, b, r, t = 35.12396, 48.40579, 35.14217, 48.41298; -- Test UA
 --local l, b, r, t = 11.0762, 42.2340, 11.1491, 42.2660; -- Test island
 --local l, b, r, t = 8.39056, 49.01417, 8.39832, 49.01772; -- Test HKA
-local l, b, r, t = 8.39469, 49.01516, 8.39924, 49.01694; -- Test HKA SH
-local l, b, r, t = 8.38268, 49.02199, 8.39178, 49.02554; -- Test FH
-local l, b, r, t = 8.40302, 49.01574, 8.40758, 49.01751; -- Test Klein
+--local l, b, r, t = 8.39469, 49.01516, 8.39924, 49.01694; -- Test HKA SH
+--local l, b, r, t = 8.38268, 49.02199, 8.39178, 49.02554; -- Test FHd
+--local l, b, r, t = 8.40302, 49.01574, 8.40758, 49.01751; -- Test Klein
+local l, b, r, t = 8.40246, 49.01254, 8.40701, 49.01431; -- Schloss
+--local l, b, r, t = 8.3736, 48.9967, 8.4465, 49.0251; -- KA
 
 --[[
--- Plugin-Erstellung Deaktiviert wegen TEST
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 
@@ -37,13 +41,29 @@ newScriptButton.ClickableWhenViewportHidden = true
 
 ]]
 
+function meterToUnit(meter)
+	return meter * COEFF
+end
+
 --[[ 
 	@return (number) Winkel zwischen p1(x1,0,z1) and p2(x2,0,y2) 
 ]]
 function angle_pointsXZ(point1:Vector3, point2:Vector3):number
-	return math.atan2(point2.Z - point1.Z, point2.X - point1.X) * 180 / math.pi
+	return math.atan2(point2.Z - point1.Z, point2.X - point1.X)
 end
 
+--[[ 
+	@return (number) Winkel zwischen p1(x1,y1,z1) und p2(x2,y2,y2) 
+]]
+function angle_pointsXYZ(point1:Vector3, point2:Vector3):number
+	local x1,y1,z1 = point1.X,point1.Y,point1.Z
+	local x2,y2,z2 = point2.X,point2.Y,point2.Z
+
+	return math.acos((x1*x2 + y1*y2 + z1*z2)
+		/(math.sqrt(math.pow(x1,2)+math.pow(y1,2)+math.pow(z1,2))
+			*math.sqrt(math.pow(x2,2)+math.pow(y2,2)+math.pow(z2,2))))
+
+end
 --[[
  @return Abstand (XZ Kathete) zwischen point1, point2
 ]]
@@ -52,41 +72,152 @@ function distance_pointsXZ(point1: Vector3, point2: Vector3):number
 end
 
 --[[
+return Abstand (XZ Kathete) zwischen point1, point2
+]]
+function distance_pointsXYZ(point1: Vector3, point2: Vector3):number
+	return math.sqrt(math.pow(point2.X - point1.X, 2) + math.pow(point2.Y - point1.Y,2) + math.pow(point2.Z - point1.Z,2))
+end
+
+
+--[[
 	@return Abstand zwischen lat1,lon1 und la2,lon2 in Meters
 ]]
 function haversine(lat1: number, lon1: number, lat2: number, lon2: number):number -- Meters
-
 	local R = 6378.137
+	local R = 6371.088
 
-	local function to_radians(degrees)
-		return degrees * (math.pi / 180)
-	end
-
-	lat1, lon1, lat2, lon2 = to_radians(lat1), to_radians(lon1), to_radians(lat2), to_radians(lon2)
+	
+	lat1, lon1, lat2, lon2 = math.rad(lat1), math.rad(lon1), math.rad(lat2), math.rad(lon2)
 
 	local dlat = lat2 - lat1
 	local dlon = lon2 - lon1
 
-
 	local a = math.sin(dlat / 2)^2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)^2
 	local c = 2 * math.asin(math.sqrt(a))
-
 
 	local distance = R * c
 
 	return distance * 1000
 end
 
---[[
-	Zeichnet eine Linie 
-]]
 function terrain_write_Line(point1: Vector3, point2: Vector3, material:Enum.Material, step:number, terrain:Terrain, terrain_Y:number, terrain_width:number)
 	local distance = distance_pointsXZ(point1,point2)
+	local distamce_3d = distance_pointsXYZ(point1,point2)
 	if distance == 0 then
 		return false
 	end
 	local ignore = {}
-	--[[ -- Von bottom can man die Collisions nicht überprüfen ]]
+	--[[ -- Von bottom kann man die Collisions nicht überprüfen ]]
+	for _, element in workspace:GetChildren() do
+		if element.Name ~= "Terrain" then
+			table.insert(ignore, element)
+		end
+	end
+	--[[]]
+	local start = 0;
+	
+	
+	
+	local rayStart = Vector3.new(point1.X, 10000, point1.Z)
+
+	local rayEnd = Vector3.new(point1.X, -1000, point1.Z)
+
+	local ray = Ray.new(rayStart, (rayEnd - rayStart).Unit * (rayEnd - rayStart).Magnitude)
+
+	local hit1, hitPosition, hitNormal, material_hit1 = workspace:FindPartOnRayWithIgnoreList(ray, ignore, false, true)
+	local new_p1 = Vector3.new(point1.X, hitPosition.Y - TERRAIN_HIGHT/2, point1.Z)
+	
+	local rayStart = Vector3.new(point2.X, 10000, point2.Z)
+
+	local rayEnd = Vector3.new(point2.X, -1000, point2.Z)
+
+	local ray = Ray.new(rayStart, (rayEnd - rayStart).Unit * (rayEnd - rayStart).Magnitude)
+
+	local hit2, hitPosition, hitNormal, material_hit2 = workspace:FindPartOnRayWithIgnoreList(ray, ignore, false, true)
+	local new_p2 = Vector3.new(point2.X, hitPosition.Y - TERRAIN_HIGHT/2, point2.Z)
+	
+	local Center_new_point = Vector3.new(
+		new_p1.X + (new_p2.X - new_p1.X)/2,
+		new_p1.Y + (new_p2.Y - new_p1.Y)/2,
+		new_p1.Z + (new_p2.Z - new_p1.Z)/2
+	)
+	if material_hit1 == Enum.Material.Grass and material_hit2 == Enum.Material.Grass then
+		terrain:FillBlock(CFrame.new(Center_new_point, new_p2), Vector3.new(terrain_width,TERRAIN_HIGHT*2,distamce_3d), Enum.Material.Air)
+		terrain:FillBlock(CFrame.new(Center_new_point, new_p2), Vector3.new(terrain_width,TERRAIN_HIGHT,distamce_3d), material)
+	end
+	
+
+	
+end
+
+function terrain_write_wall(point1: Vector3, point2: Vector3, material:Enum.Material, terrain:Terrain, floors:number, folder:Workspace)
+	local distance = distance_pointsXZ(point1,point2)
+	local distamce_3d = distance_pointsXYZ(point1,point2)
+	if floors == nil then
+		floors = 2
+	end
+	local build_width = meterToUnit(FLOOR_WIDTH * floors)
+	if distance == 0 then
+		return false
+	end
+	local ignore = {}
+	--[[ -- Von bottom kann man die Collisions nicht überprüfen ]]
+	for _, element in workspace:GetChildren() do
+		if element.Name ~= "Terrain" then
+			table.insert(ignore, element)
+		end
+	end
+	--[[]]
+	local start = 0;
+
+
+
+	local rayStart = Vector3.new(point1.X, 10000, point1.Z)
+
+	local rayEnd = Vector3.new(point1.X, -1000, point1.Z)
+
+	local ray = Ray.new(rayStart, (rayEnd - rayStart).Unit * (rayEnd - rayStart).Magnitude)
+
+	local hit1, hitPosition, hitNormal, material_hit1 = workspace:FindPartOnRayWithIgnoreList(ray, ignore, false, true)
+	local new_p1 = Vector3.new(point1.X, hitPosition.Y, point1.Z)
+
+	local rayStart = Vector3.new(point2.X, 10000, point2.Z)
+
+	local rayEnd = Vector3.new(point2.X, -1000, point2.Z)
+
+	local ray = Ray.new(rayStart, (rayEnd - rayStart).Unit * (rayEnd - rayStart).Magnitude)
+
+	local hit2, hitPosition, hitNormal, material_hit2 = workspace:FindPartOnRayWithIgnoreList(ray, ignore, false, true)
+	local new_p2 = Vector3.new(point2.X, hitPosition.Y, point2.Z)
+
+	local Center_new_point = Vector3.new(
+		new_p1.X + (new_p2.X - new_p1.X)/2,
+		new_p1.Y + (new_p2.Y - new_p1.Y)/2 + build_width /2,
+		new_p1.Z + (new_p2.Z - new_p1.Z)/2
+	)
+	local wall = Instance.new("Part")
+	wall.Anchored = true
+	--wall.Parent = workspace
+	wall.Size = Vector3.new(1, build_width, distance)
+	wall.CFrame = CFrame.new(Center_new_point)
+	local vectorXY = Vector3.new(point2.X - point1.X, 0, point2.Z - point1.Z)
+	local rotateY = math.atan2(vectorXY.X, vectorXY.Z)
+	wall.Orientation = Vector3.new(0,math.deg(rotateY),0)
+	return wall
+
+end
+
+--[[
+	Zeichnet eine Linie 
+]]
+function terrain_write_Line1(point1: Vector3, point2: Vector3, material:Enum.Material, step:number, terrain:Terrain, terrain_Y:number, terrain_width:number)
+	local distance = distance_pointsXZ(point1,point2)
+	
+	if distance == 0 then
+		return false
+	end
+	local ignore = {}
+	--[[ -- Von bottom kann man die Collisions nicht überprüfen ]]
 	for _, element in workspace:GetChildren() do
 		if element.Name ~= "Terrain" then
 			table.insert(ignore, element)
@@ -121,15 +252,89 @@ function terrain_write_Line(point1: Vector3, point2: Vector3, material:Enum.Mate
 	end
 end
 
+function getRandomColor()
+	
+	return Color3.new(math.random(255),math.random(255),math.random(255))
+end
+
+
+--[[
+	Zeichnet eine Linie 
+]]
+function terrain_write_Line2(point1: Vector3, point2: Vector3, material:Enum.Material, step:number, terrain:Terrain, terrain_Y:number, terrain_width:number)
+	local distance2d = distance_pointsXZ(point1,point2)
+	
+	local angle_xy = angle_pointsXZ(point1,point2)
+	local ignore = {}
+	local show_array = {}
+	local current_point = nil
+	local prew_point = nil
+	for _, element in workspace:GetChildren() do
+		if element.Name ~= "Terrain" then
+			table.insert(ignore, element)
+		end
+	end
+	local start = 0;
+	while true do
+		if start > distance2d then
+			start = distance2d
+		end
+		local new_point = Vector3.new(
+			point1.X + start/distance2d * (point2.X - point1.X),
+			0,
+			point1.Z + start/distance2d * (point2.Z - point1.Z)
+		)
+		local rayStart = Vector3.new(new_point.X, 1000, new_point.Z)
+
+		local rayEnd = Vector3.new(new_point.X, -1000, new_point.Z)
+
+		local ray = Ray.new(rayStart, (rayEnd - rayStart).Unit * (rayEnd - rayStart).Magnitude)
+
+		local hit, hitPosition, hitNormal = workspace:FindPartOnRayWithIgnoreList(ray, ignore, false, true)
+		current_point = hitPosition
+		
+		if(prew_point == nil and hit and hit.Material ~= material) then
+			table.insert(show_array, {CFrame.new(hitPosition.X, hitPosition.Y - TERRAIN_HIGHT /2 + TERRAIN_HIGHT, hitPosition.Z),Vector3.new(terrain_width,TERRAIN_HIGHT,terrain_width)})
+			--terrain:FillBlock(CFrame.new(hitPosition.X, hitPosition.Y - TERRAIN_HIGHT /2, hitPosition.Z), Vector3.new(terrain_width,TERRAIN_HIGHT,terrain_width), material)
+		end
+		if(hit and current_point ~= prew_point and prew_point ~= nil) then
+			
+			local new_point_3D = Vector3.new(
+				prew_point.X + (current_point.X - prew_point.X)/2,
+				(prew_point.Y + (current_point.Y - prew_point.Y)/2) - TERRAIN_HIGHT /2 + TERRAIN_HIGHT,
+				prew_point.Z + (current_point.Z - prew_point.Z)/2
+			)
+			local angle_p1_p2 = angle_pointsXYZ(prew_point,current_point)
+			local angle = angle_pointsXYZ(prew_point,current_point)
+			--local new_point_3D_CF = CFrame.new(new_point_3D) * CFrame.fromEulerAnglesXYZ(angle_p1_p2, angle_xy, 0)
+			local new_point_3D_CF = CFrame.new(new_point_3D, point2)
+			--print("angle3d: " .. math.deg(angle) .. " angle2d: " .. math.deg(angle_xy))
+			table.insert(show_array, {new_point_3D_CF,Vector3.new(terrain_width,TERRAIN_HIGHT,terrain_width)})
+			--terrain:FillBlock(new_point_3D_CF , Vector3.new(terrain_width,TERRAIN_HIGHT,terrain_width), material)
+			
+		end
+
+		prew_point = current_point
+		if start == distance2d then
+			break
+		end
+		start += step
+	end
+	
+	-- show on terrain 
+	for _, values in show_array do
+		--terrain:FillBlock(values[1] , Vector3.new(terrain_width-1,100,terrain_width-1), Enum.Material.Air)
+		terrain:FillBlock(values[1] , values[2], material)
+	end
+end
+
+
 test_array = {
 	{490196,119,84035},
 	{490199,119,84035},
 	{490129,121,84037},
 	{490131,117,84037}
 }
-
-
-
 
 l, b, r, t = tonumber(string.format("%.5f", l)), tonumber(string.format("%.5f", b)), tonumber(string.format("%.5f", r)), tonumber(string.format("%.5f", t))
 local meters = 30
@@ -228,7 +433,7 @@ if LOAD_DATA_OTM then
 		end
 		--(terrain_data.results)
 
-
+		--print(terrain_data)
 		for k, point_data in terrain_data.results do
 
 			--("{" .. a[1] .."," .. a[2] .. "," .. a[3] .. "},")
@@ -252,8 +457,9 @@ if LOAD_DATA_OTM then
 				max = point_data.elevation
 			end
 		end
-		print(request_counter)
-		wait(0.5)
+		print(request_counter .. " of " .. #holder_for_strings  .. "\tend ~" .. string.format("%.3f", (#holder_for_strings * 0.4 - k * 0.4)) .. "\ts")
+		wait(0.4)
+		
 	end
 else
 	grid = test_array
@@ -284,9 +490,7 @@ print("metersInGrad_lon " .. metersInGrad_lon)
 print("degreesPerSecond_lat " .. degreesPerSecond_lat)
 print("degreesPerSecond_lon " .. degreesPerSecond_lon)
 
-function meterToUnit(meter)
-	return meter * COEFF
-end
+
 
 -- LAT(col), ELE, LON(row)
 local meters = 30
@@ -380,7 +584,7 @@ end
 
 
 
-
+print("--Draw terrain")
 local terrain = game.Workspace.Terrain
 terrain.Anchored = true;
 terrain.Size = Vector3.new(columns * unitsCell, 5, rows * unitsCell)
@@ -391,7 +595,7 @@ local osunterRows, counterCols = 0, 0
 local metersInBlocs = unitsCell
 
 local dif = metersInBlocs/meters
-print("meters: " .. meters .. " units: " .. unitsCell.. " dif: " .. dif)
+--print("meters: " .. meters .. " units: " .. unitsCell.. " dif: " .. dif)
 for a, coordinate in ipairs(grid) do
 	
 	if(counterCols < columns) then
@@ -425,18 +629,18 @@ for a, coordinate in ipairs(grid) do
 	end
 	--print(y1,y2,y3,y4)
 	--test
-	print("Meters:\t",y1,y2,y3,y4)
+	--print("Meters:\t",y1,y2,y3,y4)
 	y1 = meterToUnit(y1)
 	y2 = meterToUnit(y2)
 	y3 = meterToUnit(y3)
 	y4 = meterToUnit(y4)	
-	print("Units:\t",y1,y2,y3,y4)
+	--print("Units:\t",y1,y2,y3,y4)
 	
 	local coef_interpol = 32
 	local matrix = {}
 	--terrain:FillBlock(CFrame.new(x		,y1,z), 		Vector3.new(metersInBlocs,10,metersInBlocs), Enum.Material.Sand)
 	local str = ""
-	local mat_rand = Enum.Material.Sand
+	local mat_rand = Enum.Material.Grass
 	if y1 == y2 and y2 == y3 and y3 == y4  then
 		--[[
 		local bloc1 = Instance.new("Part")
@@ -445,7 +649,7 @@ for a, coordinate in ipairs(grid) do
 		bloc1.Anchored = true
 		bloc1.Position = (Vector3.new(x + metersInBlocs/2, y1,z + metersInBlocs/2))
 		]]
-		terrain:FillBlock(CFrame.new(x + metersInBlocs/2, y1,z + metersInBlocs/2), 		Vector3.new(metersInBlocs,10,metersInBlocs), Enum.Material.Mud)
+		terrain:FillBlock(CFrame.new(x + metersInBlocs/2, y1,z + metersInBlocs/2), 		Vector3.new(metersInBlocs,TERRAIN_HIGHT,metersInBlocs), Enum.Material.Grass)
 	else
 		
 		for i = 1, coef_interpol do
@@ -471,7 +675,7 @@ for a, coordinate in ipairs(grid) do
 					
 
 
-					terrain:FillBlock(CFrame.new(x + (j - 1) * dif - dif/2	,matrix[i][j],z + (i - 1) * dif - dif/2), Vector3.new(dif,10,dif), mat_rand)
+					terrain:FillBlock(CFrame.new(x + (j - 1) * dif - dif/2	,matrix[i][j],z + (i - 1) * dif - dif/2), Vector3.new(dif,TERRAIN_HIGHT,dif), mat_rand)
 
 				
 				--if i ~= 0 and j~= 0 
@@ -485,9 +689,12 @@ for a, coordinate in ipairs(grid) do
 
 	end
 	if a % 10 == 0  then
-		wait(0.1)
+		wait(0.01)
+		
 	end
-	
+	if a % 100 == 0 then
+		print(a .. " of " .. #grid .. "\tend ~" .. string.format("%.3f", (#grid * (0.2) - a * 0.2))  .. "\ts")
+	end
 	
 	x+=metersInBlocs
 	counterCols+=1
@@ -514,17 +721,29 @@ local function makeOverpassRequest(bbox, _type)
 	return terrain_data
 end
 
+function binarySearch (list,value)
+	local low = 1
+	local high = #list
+	while low <= high do
+		local mid = math.floor((low+high)/2)
+		if list[mid].id > value then high = mid - 1
+		elseif list[mid].id < value then low = mid + 1
+		else return list[mid]
+		end
+	end
+	return false
+end
+
 local function search_in_Nodes(nodes, ids)
 	local single = {}
 	for i, id in ids do
-		
-		for i, node in nodes do
-			if id == node.id  then
-				table.insert(single, {node.lat, node.lon})
-			end
+		local an = binarySearch (nodes,id)
+		if an  then
+			table.insert(single, {an.lat, an.lon})
 		end
 			
 	end
+	--wait(0.01)
 	return single
 end
 local function search_in_Nodes1(nodes, ids)
@@ -551,6 +770,7 @@ end
 local bbox = ' ('..b..','..l..','..t..','..r..')'
 local nodes = makeOverpassRequest(bbox, "node")
 local nodes_no_tags = {}
+
 local trees = {}
 
 for i, element in ipairs(nodes.elements) do
@@ -560,14 +780,32 @@ for i, element in ipairs(nodes.elements) do
 			table.insert(trees, {element.lat, element.lon})
 		end
 	else
+		--nodes_no_tags[element.id] = element
 		table.insert(nodes_no_tags, element)
+	end
+	if i % 1000 == 0 then
+		wait(0.1)
 	end
 end
 
+table.sort(nodes_no_tags, function (a,b)
+	return a.id < b.id
+end)
+local prev = 0
+--[[
+for i, val in nodes_no_tags  do
+	if prev ~= 0 and prev > val .id then
+		print(val.id)
+		
+	end
+	prev = val.id
+end
+]]
 local bbox = ' ('..b..','..l..','..t..','..r..')'
 local way = makeOverpassRequest(bbox, "way")
 local buildings = {}
 local roads = {}
+local natural = {}
 
 for i, element in ipairs(way.elements) do
 	if element.tags ~= nil then
@@ -577,7 +815,7 @@ for i, element in ipairs(way.elements) do
 			local road = search_in_Nodes(nodes_no_tags, element.nodes)
 			if #road ~= 0 then
 				--print(buil)
-				table.insert(roads,road)
+				table.insert(roads,{element.tags, road})
 			end
 		end	
 		if element.tags.building ~= nil then
@@ -588,13 +826,25 @@ for i, element in ipairs(way.elements) do
 			end
 			
 		end
+		if element.tags.natural ~= nil then
+			local nat = search_in_Nodes(nodes_no_tags, element.nodes)
+			if #nat ~= 0 then
+				--print(buil)
+				table.insert(natural,{element.tags, nat})
+			end
+
+		end
 	end
+	if i % 1000 == 0 then
+		wait(0.1)
+	end
+	
 end
 
 local ServerStorage = game:GetService("ServerStorage")
 
 local tree_mod = ServerStorage:WaitForChild("Tree")
-
+print("--Draw trees")
 local tree_layer = Instance.new("Folder")
 tree_layer.Parent = ServerStorage
 tree_layer.Name = "Trees Layer"
@@ -604,10 +854,12 @@ for i, tree in ipairs(trees) do
 	n_tree.Parent = tree_layer
 	
 	
-	local pos_x, pos_z = haversine(minLat, minLong, tree[1], minLong) * COEFF, haversine(minLat, minLong, minLat, tree[2]) * COEFF
-	local rayStart = Vector3.new(pos_x, maxH * 2, pos_z)
+	local pos_x, pos_z = 
+		meterToUnit(haversine(minLat, minLong, tree[1], minLong))+ metersInBlocs/2, 
+		meterToUnit(haversine(minLat, minLong, minLat, tree[2]))+ metersInBlocs/2
+	local rayStart = Vector3.new(pos_x, 1000, pos_z)
 
-	local rayEnd = Vector3.new(pos_x, -20, pos_z)
+	local rayEnd = Vector3.new(pos_x, -1000, pos_z)
 
 	
 	local ray = Ray.new(rayStart, (rayEnd - rayStart).Unit * (rayEnd - rayStart).Magnitude)
@@ -617,8 +869,11 @@ for i, tree in ipairs(trees) do
 	
 	local hit, hitPosition, hitNormal = workspace:FindPartOnRayWithIgnoreList(ray, ign, false, true)
 	
-	local vec = Vector3.new(pos_x,hitPosition.Y + 9,pos_z)
+	local vec = Vector3.new(pos_x, hitPosition.Y + 20,pos_z)
 	n_tree.Position = vec
+	if i % 100 == 0 then
+		wait(0.01)
+	end
 end
 tree_layer.Parent = workspace
 
@@ -628,7 +883,7 @@ road.Size = Vector3.new(5,20,5)
 local road_layer = Instance.new("Folder")
 road_layer.Parent = ServerStorage
 road_layer.Name = "Road Layer"
-
+print("--Draw roads")
 for i, bul in ipairs(roads) do
 	local color = Color3.new(math.random(255),math.random(255), math.random(255))
 	local current_point = nil
@@ -637,15 +892,25 @@ for i, bul in ipairs(roads) do
 	local last_point = nil
 	local first_point_G = nil
 	local last_point_G = nil
-	for j, coord in bul  do
-		if #bul == 0 or #bul == 1 then
+	local road_type = Enum.Material.Asphalt
+	local width = 20
+	local road_type = Enum.Material.Asphalt
+	if bul[1]["highway"] == "footway" or bul[1]["highway"] == "path" then
+		--local road_type = Enum.Material.Air
+		width = 10
+	else
+		local road_type = Enum.Material.Asphalt
+	end
+	for j, coord in bul[2]  do
+		if #coord == 0 or #coord == 1 then
 			break
 		end
 		
 
-		local pos_x, pos_z = meterToUnit(haversine(minLat, minLong, coord[1], minLong)) + metersInBlocs, meterToUnit(haversine(minLat, minLong, minLat, coord[2])) + metersInBlocs
+		local pos_x, pos_z = meterToUnit(haversine(minLat, minLong, coord[1], minLong)) + metersInBlocs/2, meterToUnit(haversine(minLat, minLong, minLat, coord[2])) + metersInBlocs/2
 		
-		local road_type = Enum.Material.Asphalt
+		
+		
 		
 		current_point = Vector3.new(pos_x, 0, pos_z)
 		if(first_point == nil) then
@@ -655,17 +920,20 @@ for i, bul in ipairs(roads) do
 		if j == #bul  then
 			last_point = current_point
 			last_point_G = coord
-			if haversine(last_point_G[1], last_point_G[2], first_point_G[1], first_point_G[2]) < 30 then
-				print(10001)
-				terrain_write_Line(last_point, first_point, road_type, 1, terrain, 10, 10)
+			if haversine(last_point_G[1], last_point_G[2], first_point_G[1], first_point_G[2]) < 20 and false then
+				--print(10001)
+				terrain_write_Line(last_point, first_point, road_type, 1, terrain, TERRAIN_HIGHT, width)
 			end
 		end
 		if prew_poin ~= current_point and prew_poin ~= nil then
-			terrain_write_Line(prew_poin, current_point, road_type, 1, terrain, 10, 10)
+			terrain_write_Line(prew_poin, current_point, road_type, 1, terrain, TERRAIN_HIGHT, width)
 			--print(10002)
 		end
 		prew_poin = current_point
 		
+	end
+	if i % 10 == 0  then
+		wait(0.01)
 	end
 	
 end
@@ -677,77 +945,113 @@ buil.Size = Vector3.new(1,50,1)
 local buildings_layer = Instance.new("Folder")
 buildings_layer.Parent = ServerStorage
 buildings_layer.Name = "Building Layer"
-
+print("--Draw buildings")
 for i, bul in ipairs(buildings) do
 	local color = Color3.new(math.random(255),math.random(255), math.random(255))
+	local current_point = nil
+	local prew_poin = nil
+	local first_point = nil
+	local last_point = nil
+	local first_point_G = nil
+	local last_point_G = nil
+	local current_build = {}
+	local building_folder = Instance.new("Folder")
+	building_folder.Parent = buildings_layer
+	building_folder.Name = "Building_" .. i
 	for j, coord in bul[2]  do
-		local building = buil:Clone()
-		building.Parent = buildings_layer
-		building.Color = color
-
-		local pos_x, pos_z = meterToUnit(haversine(minLat, minLong, coord[1], minLong)) + metersInBlocs, meterToUnit(haversine(minLat, minLong, minLat, coord[2])) + metersInBlocs
-		local rayStart = Vector3.new(pos_x, maxH * 2, pos_z)
-
-		local rayEnd = Vector3.new(pos_x, -20, pos_z)
-
-
-		local ray = Ray.new(rayStart, (rayEnd - rayStart).Unit * (rayEnd - rayStart).Magnitude)
-
-
-		local ign = {buildings_layer, tree_layer, road_layer}
-
-		local hit, hitPosition, hitNormal = workspace:FindPartOnRayWithIgnoreList(ray, ign, false, true)
-
-		local vec = Vector3.new(pos_x,hitPosition.Y + 9,pos_z)
-		building.Position = vec
-
+		
+		if #coord == 0 or #coord == 1 then
+			break
+		end
+		local pos_x, pos_z = meterToUnit(haversine(minLat, minLong, coord[1], minLong))+ metersInBlocs/2, meterToUnit(haversine(minLat, minLong, minLat, coord[2])) + metersInBlocs/2
+		current_point = Vector3.new(pos_x, 0, pos_z)
+		if(first_point == nil) then
+			first_point = current_point
+			first_point_G = coord
+		end
+		if j == #bul[2]  then
+			last_point = current_point
+			last_point_G = coord
+			if haversine(last_point_G[1], last_point_G[2], first_point_G[1], first_point_G[2]) < 10 then
+				--print(10003)
+				table.insert(current_build, terrain_write_wall(last_point,first_point,Enum.Material.Brick,terrain,bul[1]))
+			end
+		end
+		if prew_poin ~= current_point and prew_poin ~= nil then
+			table.insert(current_build, terrain_write_wall(prew_poin,current_point,Enum.Material.Brick,terrain,bul[1]))
+			--terrain_write_Line(prew_poin, current_point, road_type, 1, terrain, TERRAIN_HIGHT, width)
+			--print(10002)
+		end
+		prew_poin = current_point
+		
 	end
+	if i % 10 == 0  then
+		wait(0.01)
+	end
+	 
+	if #current_build ~= 0 then
+		local cur_min, cur_max, avr = 99999,-99999,0
+		for _, val in current_build do
+			if val ~= false then
+				
+				--print(val)
+				if cur_min > val.CFrame.p.Y then
+					cur_min = val.CFrame.p.Y
+				end
+				if cur_max < val.CFrame.p.Y then
+					cur_max = val.CFrame.p.Y
+				end
+			end
+		end
+		avr = (cur_min + cur_max)/2
+		local dif = cur_max - cur_min
+		--print(avr)
+		for i, val in current_build do
+			if val ~= false then		
+
+				val.Size = Vector3.new(val.Size.X, val.Size.Y + dif * 2, val.Size.Z)
+				local orient = val.Orientation
+				val.CFrame = CFrame.new(val.CFrame.p.X, avr, val.CFrame.p.Z)
+				val.Orientation = orient
+				val.Parent = building_folder
+			end
+		end
+	end
+	
 
 end
 buildings_layer.Parent = workspace
 
 
-local buil = Instance.new("Part")
-buil.Anchored = true;
-buil.Size = Vector3.new(1,50,1)
-local natural_layer = Instance.new("Folder")
-buildings_layer.Parent = ServerStorage
-buildings_layer.Name = "Building Layer"
 
-for i, bul in ipairs(buildings) do
-	local color = Color3.new(math.random(255),math.random(255), math.random(255))
-	for j, coord in bul[2]  do
-		local building = buil:Clone()
-		building.Parent = buildings_layer
-		building.Color = color
-
-		local pos_x, pos_z = meterToUnit(haversine(minLat, minLong, coord[1], minLong)) + metersInBlocs, meterToUnit(haversine(minLat, minLong, minLat, coord[2])) + metersInBlocs
-		local rayStart = Vector3.new(pos_x, maxH * 2, pos_z)
-
-		local rayEnd = Vector3.new(pos_x, -20, pos_z)
-
-
-		local ray = Ray.new(rayStart, (rayEnd - rayStart).Unit * (rayEnd - rayStart).Magnitude)
-
-
-		local ign = {buildings_layer, tree_layer, road_layer}
-
-		local hit, hitPosition, hitNormal = workspace:FindPartOnRayWithIgnoreList(ray, ign, false, true)
-
-		local vec = Vector3.new(pos_x,hitPosition.Y + 9,pos_z)
-		building.Position = vec
-
-	end
-
-end
-buildings_layer.Parent = workspace
 
 
 print("Roads " .. #roads)
 print("Trees " .. #trees)
 print("Buildings " .. #buildings)
+local gui = game.StarterGui
+for i,player in pairs(game:GetService("Players"):GetPlayers())do
+	player.PlayerGui:WaitForChild("ScreenGui").Enabled = true
+end
 
 if SHOW_PLAYER_INFO  then
+	gui.ScreenGui.Frame.TextBox.Text = "asdasdasd"
+	while true do
+		for i,player in pairs(game:GetService("Players"):GetPlayers())do
+			local lat,lon,ele
+			lat = b + (player.Character.HumanoidRootPart.Position.X / COEFF - meters / 2) / metersInGrad_lat * 0.00001
+			lon = l + (player.Character.HumanoidRootPart.Position.Z / COEFF - meters / 2) / metersInGrad_lon * 0.00001
+			ele = min + player.Character.HumanoidRootPart.Position.Y / COEFF - 10
+			player.PlayerGui.ScreenGui.Frame.TextBox.Text = string.format([[
+				lat:	%.5f
+				lon:	%.5f
+				ele:%.1f]], lat,lon,ele)
+			
+		end
+		wait(0.2)
+		
+	end
+	--[[
 	local test_player = nil
 	for _, player  in game.Players:GetPlayers() do
 		if player.Name == "chefik_01" then
@@ -755,8 +1059,15 @@ if SHOW_PLAYER_INFO  then
 			break
 		end
 	end
+	
+	for i,player in pairs(game:GetService("Players"):GetPlayers())do
+		player
+	end
+	local lat, lon, elev = 
+	gui.ScreenGui.Frame.TextBox.Text = string.format("")
 	while true and test_player ~= nil do
 		print(test_player.Character.HumanoidRootPart.Position.Y/4)
 		wait(0.5)
 	end
+	]]
 end
