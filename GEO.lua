@@ -1,5 +1,5 @@
 --DEFINE 
-
+-- TEST
 print("START_GEOTerrain")
 --#DEFINE
 local LOAD_DATA_OTM		= true
